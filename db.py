@@ -79,10 +79,12 @@ def checkout(path: str, borrower_id: int, outfit_id: int, due_at_iso: str, notes
     conn.close()
 
 
-def return_rental(path: str, rental_id: int):
+def return_rental(path: str, rental_id: int, returned_at_iso: str = None):
     conn = get_connection(path)
     cur = conn.cursor()
-    cur.execute("UPDATE rentals SET returned_at = ? WHERE id = ?", (datetime.utcnow().isoformat(), rental_id))
+    if returned_at_iso is None:
+        returned_at_iso = datetime.utcnow().isoformat()
+    cur.execute("UPDATE rentals SET returned_at = ? WHERE id = ?", (returned_at_iso, rental_id))
     conn.commit()
     conn.close()
 
@@ -153,3 +155,92 @@ def get_outfit_by_code(path: str, code: str):
     row = cur.fetchone()
     conn.close()
     return row
+
+
+def update_borrower(path: str, borrower_id: int, name: str, phone: str = None, email: str = None):
+    conn = get_connection(path)
+    cur = conn.cursor()
+    cur.execute("UPDATE borrowers SET name = ?, phone = ?, email = ? WHERE id = ?", (name, phone, email, borrower_id))
+    conn.commit()
+    conn.close()
+
+
+def get_or_create_placeholder_borrower(path: str):
+    """Return id of a placeholder borrower used when deleting a borrower with history."""
+    conn = get_connection(path)
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM borrowers WHERE name = ?", ("<deleted borrower>",))
+    row = cur.fetchone()
+    if row:
+        pid = row['id']
+    else:
+        cur.execute("INSERT INTO borrowers (name, phone, email, created_at) VALUES (?, ?, ?, ?)",
+                    ("<deleted borrower>", None, None, datetime.utcnow().isoformat()))
+        pid = cur.lastrowid
+        conn.commit()
+    conn.close()
+    return pid
+
+
+def delete_borrower(path: str, borrower_id: int):
+    conn = get_connection(path)
+    cur = conn.cursor()
+    # only count active (not returned) rentals
+    cur.execute("SELECT COUNT(*) as c FROM rentals WHERE borrower_id = ? AND returned_at IS NULL", (borrower_id,))
+    row = cur.fetchone()
+    if row and row['c'] > 0:
+        conn.close()
+        raise Exception('Cannot delete borrower: borrower has active (not returned) rentals')
+    # if borrower has historical rentals, reassign them to a placeholder borrower so FK stays valid
+    cur.execute("SELECT COUNT(*) as c FROM rentals WHERE borrower_id = ?", (borrower_id,))
+    row2 = cur.fetchone()
+    if row2 and row2['c'] > 0:
+        pid = get_or_create_placeholder_borrower(path)
+        cur.execute("UPDATE rentals SET borrower_id = ? WHERE borrower_id = ?", (pid, borrower_id))
+    cur.execute("DELETE FROM borrowers WHERE id = ?", (borrower_id,))
+    conn.commit()
+    conn.close()
+
+
+def update_outfit(path: str, outfit_id: int, code: str, description: str = None, size: str = None):
+    conn = get_connection(path)
+    cur = conn.cursor()
+    cur.execute("UPDATE outfits SET code = ?, description = ?, size = ? WHERE id = ?", (code, description, size, outfit_id))
+    conn.commit()
+    conn.close()
+
+
+def get_or_create_placeholder_outfit(path: str):
+    conn = get_connection(path)
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM outfits WHERE code = ?", ("<deleted-outfit>",))
+    row = cur.fetchone()
+    if row:
+        pid = row['id']
+    else:
+        cur.execute("INSERT INTO outfits (code, description, size, created_at) VALUES (?, ?, ?, ?)",
+                    ("<deleted-outfit>", "Deleted outfit placeholder", None, datetime.utcnow().isoformat()))
+        pid = cur.lastrowid
+        conn.commit()
+    conn.close()
+    return pid
+
+
+def delete_outfit(path: str, outfit_id: int):
+    conn = get_connection(path)
+    cur = conn.cursor()
+    # only count active (not returned) rentals
+    cur.execute("SELECT COUNT(*) as c FROM rentals WHERE outfit_id = ? AND returned_at IS NULL", (outfit_id,))
+    row = cur.fetchone()
+    if row and row['c'] > 0:
+        conn.close()
+        raise Exception('Cannot delete outfit: outfit has active (not returned) rentals')
+    # if outfit has historical rentals, reassign them to a placeholder outfit so FK stays valid
+    cur.execute("SELECT COUNT(*) as c FROM rentals WHERE outfit_id = ?", (outfit_id,))
+    row2 = cur.fetchone()
+    if row2 and row2['c'] > 0:
+        pid = get_or_create_placeholder_outfit(path)
+        cur.execute("UPDATE rentals SET outfit_id = ? WHERE outfit_id = ?", (pid, outfit_id))
+    cur.execute("DELETE FROM outfits WHERE id = ?", (outfit_id,))
+    conn.commit()
+    conn.close()
