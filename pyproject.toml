@@ -1,0 +1,11 @@
+[project]
+name = "outfit-manager"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "PySimpleGUI>=4.64.0",
+    "pyinstaller>=5.10",
+    "tk>=0.1.0",
+]
