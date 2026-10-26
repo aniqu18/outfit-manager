@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Outfit Manager</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark" data-icon="dress"></span>
+        <span>Outfit Manager</span>
+      </div>
+
+      <nav class="nav">
+        <button class="nav-item" data-view="costumes"><span data-icon="dress"></span>Costumes</button>
+        <button class="nav-item" data-view="rentals"><span data-icon="user"></span>Rentals<span class="nav-badge" id="overdue-badge" hidden></span></button>
+        <button class="nav-item" data-view="history"><span data-icon="clock"></span>History</button>
+      </nav>
+
+      <div class="regions-header">
+        <span>Regions</span>
+        <button class="icon-btn small" id="add-region" title="Add region" data-icon="plus"></button>
+      </div>
+      <div class="regions" id="regions"></div>
+    </aside>
+
+    <main class="main" id="main"></main>
+  </div>
+
+  <div class="drawer-scrim" id="drawer-scrim" hidden></div>
+  <aside class="drawer" id="drawer" aria-hidden="true"></aside>
+
+  <div class="modal-scrim" id="modal-scrim" hidden>
+    <div class="modal" id="modal" role="dialog" aria-modal="true"></div>
+  </div>
+
+  <div class="toasts" id="toasts"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

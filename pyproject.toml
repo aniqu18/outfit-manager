@@ -1,11 +1,17 @@
 [project]
 name = "outfit-manager"
 version = "0.1.0"
-description = "Add your description here"
+description = "Desktop app for tracking outfit rentals"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "PySimpleGUI>=4.64.0",
-    "pyinstaller>=5.10",
-    "tk>=0.1.0",
+    "pillow>=13.0.0",
+    "pysimplegui>=6.3.0.1",
+    "pywebview>=6.2.1",
+]
+
+[dependency-groups]
+dev = [
+    "pygobject>=3.58.1 ; sys_platform == 'linux'",
+    "pyinstaller>=6.22.3",
 ]
