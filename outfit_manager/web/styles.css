@@ -260,11 +260,12 @@ svg { width: 18px; height: 18px; flex: none; }
 
 .costume-form { display: grid; grid-template-columns: 200px 1fr; gap: 20px; }
 .photo-picker {
-  aspect-ratio: 4 / 5; border-radius: var(--radius); overflow: hidden; border: 1.5px dashed var(--border);
-  cursor: pointer; position: relative; background: none; padding: 0;
+  display: block; width: 100%; aspect-ratio: 4 / 5; border-radius: var(--radius); overflow: hidden;
+  border: 1.5px dashed var(--border); cursor: pointer; position: relative; background: none; padding: 0;
 }
 .photo-picker:hover { border-color: var(--primary); }
-.photo-picker .photo { flex-direction: column; gap: 6px; font-size: 13px; }
+/* Fill the whole box, whether it shows the placeholder or the chosen photo */
+.photo-picker .photo { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 6px; font-size: 13px; }
 .photo-picker-actions { display: flex; justify-content: center; gap: 4px; margin-top: 6px; }
 
 .rent-summary { display: flex; gap: 14px; align-items: center; margin-bottom: 16px; }
