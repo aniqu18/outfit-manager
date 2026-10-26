@@ -17,6 +17,33 @@ uv run main.py
 On Linux, pywebview uses WebKitGTK: install `webkit2gtk-4.1` and
 `gobject-introspection` from your distro.
 
+## Download
+
+Ready-to-run builds are attached to each
+[GitHub release](../../releases):
+
+- **Windows:** `OutfitManager-windows.exe` – double-click to start. Windows may
+  show a SmartScreen warning the first time because the app isn't signed:
+  click *More info → Run anyway*.
+- **Linux (x86_64):** `OutfitManager-linux-x86_64.tar.gz` – unpack and run
+  `./OutfitManager`. It brings its own browser engine (Qt), so it doesn't need
+  WebKitGTK.
+
+## Building
+
+The builds are made by GitHub Actions (`.github/workflows/build.yml`):
+
+To build locally (only for the system you're on – Windows builds need Windows):
+
+```sh
+uv sync --no-default-groups --group build                # Windows
+uv sync --no-default-groups --group build --group qt     # Linux
+uv run --no-sync pyinstaller --noconfirm OutfitManager.spec
+dist/OutfitManager --self-test
+```
+
+Run `uv sync` afterwards to get the normal development setup back.
+
 ## Where the data lives
 
 The database and photos are stored per user, outside the app folder, so
@@ -30,13 +57,16 @@ Set `OUTFIT_MANAGER_DATA=/some/folder` to use a different folder. Back up this f
 ## Project layout
 
 ```
-main.py                    entry point
+main.py                    entry point (`--self-test` checks a build can start)
+OutfitManager.spec         PyInstaller build recipe
+.github/workflows/build.yml  Windows + Linux builds and releases
 outfit_manager/
   app.py                   window + functions the screens call
   db.py                    SQLite storage and rules (incl. upgrade of old databases)
   photos.py                photo import, resizing, thumbnails
   paths.py                 data folder location
   web/                     the screens (index.html, styles.css, app.js)
+  assets/                  app icon
 ```
 
 ## AI Usage Disclosure

@@ -160,10 +160,54 @@ def _copy_legacy_db(target: Path):
         shutil.copy2(legacy, target)
 
 
+FROZEN = getattr(sys, "frozen", False)  # True inside the PyInstaller build
+IS_LINUX = sys.platform.startswith("linux")
+
+
+def _gui():
+    """Which window engine pywebview should use (None = its default)."""
+    if IS_LINUX and FROZEN:
+        # The Linux build bundles Qt; the system WebKitGTK is only used when running from source
+        return "qt"
+    return None
+
+
+def self_test() -> int:
+    """Check the build can start: bundled screens, database, photos and window engine. Returns an exit code."""
+    import tempfile
+
+    try:
+        index = resource_dir() / "web" / "index.html"
+        assert index.exists(), f"missing {index}"
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / DB_NAME)
+            region = db.add_region("Test")
+            costume = db.add_costume(region, "Test costume")
+            db.rent(costume, "Tester", today(), today())
+            assert db.list_active_rentals(), "rental not saved"
+            PhotoStore(Path(tmp) / "photos")
+        import importlib
+
+        # (`from webview import guilib` would give pywebview's attribute of that name, not the module)
+        importlib.import_module("webview.guilib").initialize(_gui())  # imports the window engine (WinForms/WebView2 or Qt)
+        result, code = "self-test ok", 0
+    except Exception:
+        result, code = traceback.format_exc(), 1
+    # The Windows build has no console, so the result can also go to a file
+    if log := os.environ.get("OUTFIT_MANAGER_SELFTEST_LOG"):
+        Path(log).write_text(result + "\n", encoding="utf-8")
+    print(result)
+    return code
+
+
 def main():
-    if sys.platform.startswith("linux"):
+    if IS_LINUX:
         # WebKitGTK's default renderer crashes on some setups (e.g. NVIDIA on Wayland)
         os.environ.setdefault("WEBKIT_DISABLE_DMABUF_RENDERER", "1")
+        if FROZEN:
+            # Qt's browser sandbox is blocked on some distros (e.g. Ubuntu's user-namespace rules).
+            # The app only shows its own local screens, so it is safe to turn off.
+            os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
     folder = data_dir()
     db_path = folder / DB_NAME
     _copy_legacy_db(db_path)
@@ -177,4 +221,5 @@ def main():
         min_size=(960, 640),
         background_color="#FAF7F2",
     )
-    webview.start()
+    # Window icon (Linux; on Windows the icon comes from the .exe)
+    webview.start(gui=_gui(), icon=str(resource_dir() / "assets" / "icon.png"))
