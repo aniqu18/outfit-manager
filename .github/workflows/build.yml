@@ -3,6 +3,7 @@
 #   and publish both files as a GitHub release.
 # - Or run it by hand (Actions tab -> Build -> Run workflow) to just get the files
 #   as downloadable artifacts.
+# Files are kept as artifacts for 30 days.
 name: Build
 
 on:
@@ -73,6 +74,7 @@ jobs:
           name: ${{ matrix.file }}
           path: ${{ matrix.file }}
           if-no-files-found: error
+          retention-days: 30
 
   release:
     name: Publish release
