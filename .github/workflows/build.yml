@@ -1,0 +1,93 @@
+# Builds the Windows .exe and the Linux app.
+# - Push a version tag (e.g. `git tag v0.2.0 && git push origin v0.2.0`) to build
+#   and publish both files as a GitHub release.
+# - Or run it by hand (Actions tab -> Build -> Run workflow) to just get the files
+#   as downloadable artifacts.
+# Files are kept as artifacts for 30 days.
+name: Build
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write # needed to create the release
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows
+            os: windows-latest
+            groups: --group build
+            file: OutfitManager-windows.exe
+          - name: linux
+            os: ubuntu-24.04
+            groups: --group build --group qt
+            file: OutfitManager-linux-x86_64.tar.gz
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install system libraries Qt needs (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libfontconfig1 \
+            libdbus-1-3 libnss3 libxcomposite1 libxdamage1 libxrandr2 libxtst6 libxkbfile1 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libasound2t64
+
+      - name: Install Python and dependencies
+        run: uv sync --locked --no-default-groups ${{ matrix.groups }}
+
+      - name: Build
+        run: uv run --no-sync pyinstaller --noconfirm OutfitManager.spec
+
+      - name: Self-test the build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          OUTFIT_MANAGER_SELFTEST_LOG: ${{ runner.temp }}\selftest.log
+        run: |
+          $p = Start-Process -FilePath dist\OutfitManager.exe -ArgumentList '--self-test' -Wait -PassThru
+          Get-Content $env:OUTFIT_MANAGER_SELFTEST_LOG
+          if ($p.ExitCode -ne 0) { exit 1 }
+          Move-Item dist\OutfitManager.exe ${{ matrix.file }}
+
+      - name: Self-test the build (Linux)
+        if: runner.os == 'Linux'
+        env:
+          QT_QPA_PLATFORM: offscreen # no screen on the build machine
+        run: |
+          dist/OutfitManager --self-test
+          tar -czf ${{ matrix.file }} -C dist OutfitManager
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.file }}
+          path: ${{ matrix.file }}
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: files
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: files/*
+          generate_release_notes: true
