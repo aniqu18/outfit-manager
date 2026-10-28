@@ -271,5 +271,6 @@ def _run(folder: Path):
         min_size=(960, 640),
         background_color="#FAF7F2",
     )
-    # Window icon (Linux; on Windows the icon comes from the .exe)
-    webview.start(gui=_gui(), icon=str(resource_dir() / "assets" / "icon.png"))
+    # Window icon. Windows (.NET) only accepts .ico files; a .png crashes the window thread there.
+    icon = "icon.ico" if sys.platform == "win32" else "icon.png"
+    webview.start(gui=_gui(), icon=str(resource_dir() / "assets" / icon))
