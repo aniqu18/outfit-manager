@@ -59,6 +59,23 @@ jobs:
           $p = Start-Process -FilePath dist\OutfitManager.exe -ArgumentList '--self-test' -Wait -PassThru
           Get-Content $env:OUTFIT_MANAGER_SELFTEST_LOG
           if ($p.ExitCode -ne 0) { exit 1 }
+
+      - name: Start the app and check it keeps running (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          OUTFIT_MANAGER_DATA: ${{ runner.temp }}\outfit-data
+        run: |
+          # Catches crashes that only happen once the window is created
+          $p = Start-Process -FilePath dist\OutfitManager.exe -PassThru
+          Start-Sleep 20
+          Get-Content "$env:OUTFIT_MANAGER_DATA\outfit-manager.log" -ErrorAction SilentlyContinue
+          if ($p.HasExited) {
+            Write-Host "The app exited after start (code $($p.ExitCode))"
+            Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = '.NET Runtime' } -MaxEvents 1 -ErrorAction SilentlyContinue | Format-List Message
+            exit 1
+          }
+          Stop-Process -Id $p.Id -Force
           Move-Item dist\OutfitManager.exe ${{ matrix.file }}
 
       - name: Self-test the build (Linux)
