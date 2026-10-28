@@ -1,9 +1,11 @@
 """Starts the app window and exposes Python functions to the web screens."""
 
 import functools
+import logging
 import os
 import shutil
 import sys
+import threading
 import traceback
 from pathlib import Path
 
@@ -14,6 +16,9 @@ from .paths import data_dir, resource_dir
 from .photos import IMAGE_TYPES, PhotoStore
 
 DB_NAME = "outfits.db"
+LOG_NAME = "outfit-manager.log"
+
+log = logging.getLogger("outfit_manager")
 
 
 def api_call(func):
@@ -26,7 +31,7 @@ def api_call(func):
         except ValueError as e:
             return {"ok": False, "error": str(e)}
         except Exception:
-            traceback.print_exc()
+            log.exception("Error in %s", func.__name__)
             return {"ok": False, "error": "Something went wrong. Please try again."}
 
     return wrapper
@@ -200,7 +205,53 @@ def self_test() -> int:
     return code
 
 
+def _setup_logging(folder: Path) -> Path:
+    """Log to a file in the data folder (the Windows build has no console to show errors in).
+
+    pywebview's own messages end up here too. The file is capped at 1 MB (plus one older copy).
+    """
+    from logging.handlers import RotatingFileHandler
+
+    path = folder / LOG_NAME
+    handler = RotatingFileHandler(path, maxBytes=1_000_000, backupCount=1, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root = logging.getLogger()
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+
+    # Also record crashes that happen outside our own code paths (e.g. in pywebview's threads)
+    sys.excepthook = lambda *exc: log.critical("Unhandled error", exc_info=exc)
+    threading.excepthook = lambda a: log.critical(
+        "Unhandled error in thread %s", a.thread.name if a.thread else "?",
+        exc_info=(a.exc_type, a.exc_value, a.exc_traceback),
+    )
+    return path
+
+
+def _show_error(message: str):
+    """Tell the user something went wrong, even without a console."""
+    if sys.stderr:  # None in the Windows build
+        print(message, file=sys.stderr)
+    if sys.platform == "win32":
+        import ctypes
+
+        ctypes.windll.user32.MessageBoxW(None, message, "Outfit Manager", 0x10)  # 0x10 = error icon
+
+
 def main():
+    folder = data_dir()
+    log_path = _setup_logging(folder)
+    log.info("Starting Outfit Manager (python %s, %s, frozen=%s)", sys.version.split()[0], sys.platform, FROZEN)
+    try:
+        _run(folder)
+    except Exception:
+        log.exception("Outfit Manager could not start")
+        _show_error(f"Outfit Manager could not start.\n\nDetails were saved to:\n{log_path}")
+        raise SystemExit(1) from None
+    log.info("Outfit Manager closed")
+
+
+def _run(folder: Path):
     if IS_LINUX:
         # WebKitGTK's default renderer crashes on some setups (e.g. NVIDIA on Wayland)
         os.environ.setdefault("WEBKIT_DISABLE_DMABUF_RENDERER", "1")
@@ -208,7 +259,6 @@ def main():
             # Qt's browser sandbox is blocked on some distros (e.g. Ubuntu's user-namespace rules).
             # The app only shows its own local screens, so it is safe to turn off.
             os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
-    folder = data_dir()
     db_path = folder / DB_NAME
     _copy_legacy_db(db_path)
     api = Api(Database(db_path), PhotoStore(folder / "photos"))
