@@ -7,7 +7,7 @@
   to Default.
 - **Rent out** a costume to someone with a return-by date; **take it back** when it is returned.
 - **Rentals** lists everything that is out, with overdue costumes first.
-- **History** shows past rentals and whether they came back on time.
+- **Return history** (History in the sidebar) lists returned costumes and whether they came back on time.
 
 Built with Python, [pywebview](https://pywebview.flowrl.com/) (the window) and
 SQLite. The screens are plain HTML/CSS/JS in `outfit_manager/web/`.

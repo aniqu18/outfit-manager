@@ -292,7 +292,7 @@ async function renderRentals() {
 async function renderHistory() {
   main().innerHTML = `
     <div class="page-header">
-      <div><h1 class="page-title">History</h1><div class="page-subtitle" id="history-count">&nbsp;</div></div>
+      <div><h1 class="page-title">Return history</h1><div class="page-subtitle" id="history-count">&nbsp;</div></div>
       <div class="page-actions">
         <label class="search">${icon("search")}<input id="history-search" placeholder="Search borrower or costume" value="${esc(state.historySearch)}"></label>
       </div>
@@ -317,7 +317,7 @@ async function renderHistoryList() {
   if (!items.length) {
     list.innerHTML = state.historySearch
       ? `<div class="empty"><h3>No matches</h3>Nothing matches “${esc(state.historySearch)}”.</div>`
-      : `<div class="empty"><h3>No history yet</h3>Returned costumes will show up here.</div>`;
+      : `<div class="empty"><h3>No returns yet</h3>Costumes show up here once they are returned.</div>`;
     return;
   }
   list.innerHTML = `<div class="list">
@@ -396,12 +396,12 @@ async function renderDrawer() {
       </div>
 
       <div class="mini-history">
-        <div class="section-title">Rental history</div>
+        <div class="section-title">Return history</div>
         ${c.history.length ? c.history.map((h) => `
           <div class="mini-history-item">
             <span>${esc(h.borrower)}</span>
             <span class="row-sub">${fmtShort(h.borrowed_on)} – ${fmtDate(h.returned_on)}${h.late ? ' · <span class="overdue-text">late</span>' : ""}</span>
-          </div>`).join("") : '<div class="row-sub">Not rented out yet.</div>'}
+          </div>`).join("") : '<div class="row-sub">No returns yet.</div>'}
       </div>
     </div>`;
 
