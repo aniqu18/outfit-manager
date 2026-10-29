@@ -1,4 +1,4 @@
-"""SQLite storage for regions, costumes, borrowers and rentals.
+"""SQLite storage for costume groups, costumes, borrowers and rentals.
 
 All dates are stored as 'YYYY-MM-DD' text; timestamps as ISO text.
 Functions return plain dicts so they can be passed straight to the web screens.
@@ -8,9 +8,11 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import date, datetime
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
-SCHEMA = """
+# Version 2 layout. New databases are created with it and then upgraded like old ones
+# (see _init_schema), so there is a single path to the current layout.
+_SCHEMA_V2 = """
 CREATE TABLE regions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -57,7 +59,28 @@ ACTIVE_RENTAL_INDEX = """
 CREATE UNIQUE INDEX one_active_rental_per_costume ON rentals(costume_id) WHERE returned_on IS NULL;
 """
 
-NO_REGION = "No region"
+NO_REGION = "No region"  # name used by the version 1 -> 2 upgrade
+DEFAULT_GROUP = "Default"
+
+# Version 3: "regions" became free-form "groups", and there is always one default group
+# that can't be deleted (new costumes go there; costumes of a deleted group move there).
+_MIGRATE_V2_TO_V3 = f"""
+ALTER TABLE regions RENAME TO costume_groups;
+ALTER TABLE costume_groups ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE costumes RENAME COLUMN region_id TO group_id;
+
+-- The old catch-all "No region" becomes the default group
+UPDATE costume_groups SET name = '{DEFAULT_GROUP}'
+WHERE name = '{NO_REGION}' AND NOT EXISTS (SELECT 1 FROM costume_groups WHERE name = '{DEFAULT_GROUP}');
+INSERT INTO costume_groups (name, created_at)
+SELECT '{DEFAULT_GROUP}', datetime('now', 'localtime')
+WHERE NOT EXISTS (SELECT 1 FROM costume_groups WHERE name = '{DEFAULT_GROUP}');
+UPDATE costume_groups SET is_default = 1 WHERE name = '{DEFAULT_GROUP}';
+UPDATE costumes SET group_id = (SELECT id FROM costume_groups WHERE is_default = 1)
+WHERE group_id IS NULL AND deleted_at IS NULL;
+
+CREATE UNIQUE INDEX one_default_group ON costume_groups(is_default) WHERE is_default = 1;
+"""
 
 
 def now_iso() -> str:
@@ -111,73 +134,83 @@ class Database:
                 return
             if version > SCHEMA_VERSION:
                 raise RuntimeError("This database was made by a newer version of Outfit Manager.")
-            has_old_tables = conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'outfits'"
-            ).fetchone()
-            script = _MIGRATE_FROM_V1 if has_old_tables else SCHEMA + ACTIVE_RENTAL_INDEX
+            steps = []
+            if version < 2:
+                has_old_tables = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'outfits'"
+                ).fetchone()
+                steps.append(_MIGRATE_FROM_V1 if has_old_tables else _SCHEMA_V2 + ACTIVE_RENTAL_INDEX)
+            steps.append(_MIGRATE_V2_TO_V3)
+            # All steps run in one transaction: an interrupted upgrade leaves the database untouched
             conn.executescript(
-                f"PRAGMA foreign_keys = OFF; BEGIN; {script} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+                f"PRAGMA foreign_keys = OFF; BEGIN; {''.join(steps)} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             )
         finally:
             conn.close()
 
-    # --- regions ---
+    # --- groups ---
 
-    def list_regions(self):
-        """Regions with costume counts and a cover photo (the first costume photo)."""
+    def list_groups(self):
+        """Groups (default first) with costume counts and a cover photo (the first costume photo)."""
         with self.connect() as conn:
             rows = conn.execute("""
-                SELECT reg.id, reg.name,
+                SELECT g.id, g.name, g.is_default,
                        COUNT(c.id) AS costume_count,
                        COUNT(c.id) - COUNT(r.id) AS available_count,
                        (SELECT photo FROM costumes
-                        WHERE region_id = reg.id AND deleted_at IS NULL AND photo IS NOT NULL
+                        WHERE group_id = g.id AND deleted_at IS NULL AND photo IS NOT NULL
                         ORDER BY id LIMIT 1) AS photo
-                FROM regions reg
-                LEFT JOIN costumes c ON c.region_id = reg.id AND c.deleted_at IS NULL
+                FROM costume_groups g
+                LEFT JOIN costumes c ON c.group_id = g.id AND c.deleted_at IS NULL
                 LEFT JOIN rentals r ON r.costume_id = c.id AND r.returned_on IS NULL
-                GROUP BY reg.id
-                ORDER BY reg.name
+                GROUP BY g.id
+                ORDER BY g.is_default DESC, g.name
             """).fetchall()
-        return [dict(r) for r in rows]
+        return [{**dict(r), "is_default": bool(r["is_default"])} for r in rows]
 
-    def add_region(self, name: str) -> int:
+    @staticmethod
+    def _default_group_id(conn) -> int:
+        return conn.execute("SELECT id FROM costume_groups WHERE is_default = 1").fetchone()["id"]
+
+    def add_group(self, name: str) -> int:
         name = _clean(name)
         if not name:
-            raise ValueError("Region name is required.")
+            raise ValueError("Group name is required.")
         with self.connect() as conn:
-            if conn.execute("SELECT 1 FROM regions WHERE name = ?", (name,)).fetchone():
-                raise ValueError(f"Region '{name}' already exists.")
+            if conn.execute("SELECT 1 FROM costume_groups WHERE name = ?", (name,)).fetchone():
+                raise ValueError(f"Group '{name}' already exists.")
             return conn.execute(
-                "INSERT INTO regions (name, created_at) VALUES (?, ?)", (name, now_iso())
+                "INSERT INTO costume_groups (name, created_at) VALUES (?, ?)", (name, now_iso())
             ).lastrowid
 
-    def rename_region(self, region_id: int, name: str):
+    def rename_group(self, group_id: int, name: str):
         name = _clean(name)
         if not name:
-            raise ValueError("Region name is required.")
-        with self.connect() as conn:
-            if conn.execute("SELECT 1 FROM regions WHERE name = ? AND id != ?", (name, region_id)).fetchone():
-                raise ValueError(f"Region '{name}' already exists.")
-            conn.execute("UPDATE regions SET name = ? WHERE id = ?", (name, region_id))
-
-    def delete_region(self, region_id: int):
+            raise ValueError("Group name is required.")
         with self.connect() as conn:
             if conn.execute(
-                "SELECT 1 FROM costumes WHERE region_id = ? AND deleted_at IS NULL", (region_id,)
+                "SELECT 1 FROM costume_groups WHERE name = ? AND id != ?", (name, group_id)
             ).fetchone():
-                raise ValueError("Move or delete the costumes in this region first.")
-            conn.execute("UPDATE costumes SET region_id = NULL WHERE region_id = ?", (region_id,))
-            conn.execute("DELETE FROM regions WHERE id = ?", (region_id,))
+                raise ValueError(f"Group '{name}' already exists.")
+            conn.execute("UPDATE costume_groups SET name = ? WHERE id = ?", (name, group_id))
+
+    def delete_group(self, group_id: int):
+        """Delete a group; its costumes (incl. deleted ones, for history) move to the default group."""
+        with self.connect() as conn:
+            default_id = self._default_group_id(conn)
+            if group_id == default_id:
+                raise ValueError("The default group can't be deleted (you can rename it).")
+            conn.execute("UPDATE costumes SET group_id = ? WHERE group_id = ?", (default_id, group_id))
+            conn.execute("DELETE FROM costume_groups WHERE id = ?", (group_id,))
 
     # --- costumes ---
 
     _COSTUME_SELECT = """
-        SELECT c.id, c.region_id, reg.name AS region, c.name, c.inventory_no, c.size,
+        SELECT c.id, c.group_id, g.name AS group_name, c.name, c.inventory_no, c.size,
                c.description, c.photo,
                r.id AS rental_id, b.name AS borrower, r.borrowed_on, r.due_on, r.notes
         FROM costumes c
-        LEFT JOIN regions reg ON reg.id = c.region_id
+        LEFT JOIN costume_groups g ON g.id = c.group_id
         LEFT JOIN rentals r ON r.costume_id = c.id AND r.returned_on IS NULL
         LEFT JOIN borrowers b ON b.id = r.borrower_id
         WHERE c.deleted_at IS NULL
@@ -190,11 +223,11 @@ class Database:
         c["overdue"] = bool(c["due_on"]) and c["due_on"] < today()
         return c
 
-    def list_costumes(self, region_id: int = None):
+    def list_costumes(self, group_id: int = None):
         query, params = self._COSTUME_SELECT, ()
-        if region_id is not None:
-            query += " AND c.region_id = ?"
-            params = (region_id,)
+        if group_id is not None:
+            query += " AND c.group_id = ?"
+            params = (group_id,)
         with self.connect() as conn:
             rows = conn.execute(query + " ORDER BY c.name, c.inventory_no", params).fetchall()
         return [self._costume(r) for r in rows]
@@ -204,33 +237,36 @@ class Database:
             row = conn.execute(self._COSTUME_SELECT + " AND c.id = ?", (costume_id,)).fetchone()
         return self._costume(row) if row else None
 
-    def _costume_fields(self, conn, costume_id, region_id, name, inventory_no, size, description):
+    def _costume_fields(self, conn, costume_id, group_id, name, inventory_no, size, description):
         name, inventory_no = _clean(name), _clean(inventory_no)
         if not name:
             raise ValueError("Costume name is required.")
-        if not conn.execute("SELECT 1 FROM regions WHERE id = ?", (region_id,)).fetchone():
-            raise ValueError("Choose a region.")
+        if group_id is None:
+            group_id = self._default_group_id(conn)
+        elif not conn.execute("SELECT 1 FROM costume_groups WHERE id = ?", (group_id,)).fetchone():
+            raise ValueError("This group no longer exists.")
         if inventory_no and conn.execute(
             "SELECT 1 FROM costumes WHERE inventory_no = ? AND deleted_at IS NULL AND id IS NOT ?",
             (inventory_no, costume_id),
         ).fetchone():
             raise ValueError(f"Inventory number '{inventory_no}' is already used.")
-        return region_id, name, inventory_no, _clean(size), _clean(description)
+        return group_id, name, inventory_no, _clean(size), _clean(description)
 
-    def add_costume(self, region_id, name, inventory_no=None, size=None, description=None, photo=None) -> int:
+    def add_costume(self, group_id, name, inventory_no=None, size=None, description=None, photo=None) -> int:
+        """Add a costume; `group_id` None puts it in the default group."""
         with self.connect() as conn:
-            fields = self._costume_fields(conn, None, region_id, name, inventory_no, size, description)
+            fields = self._costume_fields(conn, None, group_id, name, inventory_no, size, description)
             return conn.execute(
-                "INSERT INTO costumes (region_id, name, inventory_no, size, description, photo, created_at)"
+                "INSERT INTO costumes (group_id, name, inventory_no, size, description, photo, created_at)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (*fields, photo, now_iso()),
             ).lastrowid
 
-    def update_costume(self, costume_id, region_id, name, inventory_no=None, size=None, description=None):
+    def update_costume(self, costume_id, group_id, name, inventory_no=None, size=None, description=None):
         with self.connect() as conn:
-            fields = self._costume_fields(conn, costume_id, region_id, name, inventory_no, size, description)
+            fields = self._costume_fields(conn, costume_id, group_id, name, inventory_no, size, description)
             conn.execute(
-                "UPDATE costumes SET region_id = ?, name = ?, inventory_no = ?, size = ?, description = ?"
+                "UPDATE costumes SET group_id = ?, name = ?, inventory_no = ?, size = ?, description = ?"
                 " WHERE id = ?",
                 (*fields, costume_id),
             )
@@ -315,13 +351,13 @@ class Database:
 
     _RENTAL_SELECT = """
         SELECT r.id, r.costume_id, c.name AS costume, c.inventory_no, c.size, c.photo,
-               reg.name AS region, b.name AS borrower,
+               g.name AS group_name, b.name AS borrower,
                r.borrowed_on, r.due_on, r.returned_on, r.notes,
                c.deleted_at IS NOT NULL AS costume_deleted
         FROM rentals r
         JOIN costumes c ON c.id = r.costume_id
         JOIN borrowers b ON b.id = r.borrower_id
-        LEFT JOIN regions reg ON reg.id = c.region_id
+        LEFT JOIN costume_groups g ON g.id = c.group_id
     """
 
     def list_active_rentals(self):
@@ -359,7 +395,7 @@ class Database:
 _MIGRATE_FROM_V1 = f"""
 ALTER TABLE borrowers RENAME TO old_borrowers;
 ALTER TABLE rentals RENAME TO old_rentals;
-{SCHEMA}
+{_SCHEMA_V2}
 
 INSERT INTO regions (name, created_at)
 SELECT '{NO_REGION}', datetime('now', 'localtime')

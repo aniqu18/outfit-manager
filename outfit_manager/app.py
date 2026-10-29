@@ -57,29 +57,29 @@ class Api:
     def summary(self):
         return {"today": today(), "overdue_count": self._db.overdue_count()}
 
-    # --- regions ---
+    # --- groups ---
 
     @api_call
-    def list_regions(self):
-        return [self._with_photo(r) for r in self._db.list_regions()]
+    def list_groups(self):
+        return [self._with_photo(r) for r in self._db.list_groups()]
 
     @api_call
-    def add_region(self, name):
-        return self._db.add_region(name)
+    def add_group(self, name):
+        return self._db.add_group(name)
 
     @api_call
-    def rename_region(self, region_id, name):
-        self._db.rename_region(region_id, name)
+    def rename_group(self, group_id, name):
+        self._db.rename_group(group_id, name)
 
     @api_call
-    def delete_region(self, region_id):
-        self._db.delete_region(region_id)
+    def delete_group(self, group_id):
+        self._db.delete_group(group_id)
 
     # --- costumes ---
 
     @api_call
-    def list_costumes(self, region_id=None, search=""):
-        costumes = self._db.list_costumes(region_id)
+    def list_costumes(self, group_id=None, search=""):
+        costumes = self._db.list_costumes(group_id)
         if search := (search or "").strip().casefold():
             costumes = [
                 c for c in costumes
@@ -97,14 +97,14 @@ class Api:
     @api_call
     def add_costume(self, data):
         return self._db.add_costume(
-            data.get("region_id"), data.get("name"), data.get("inventory_no"),
+            data.get("group_id"), data.get("name"), data.get("inventory_no"),
             data.get("size"), data.get("description"), data.get("photo"),
         )
 
     @api_call
     def update_costume(self, costume_id, data):
         self._db.update_costume(
-            costume_id, data.get("region_id"), data.get("name"), data.get("inventory_no"),
+            costume_id, data.get("group_id"), data.get("name"), data.get("inventory_no"),
             data.get("size"), data.get("description"),
         )
         if "photo" in data:
@@ -186,8 +186,8 @@ def self_test() -> int:
         assert index.exists(), f"missing {index}"
         with tempfile.TemporaryDirectory() as tmp:
             db = Database(Path(tmp) / DB_NAME)
-            region = db.add_region("Test")
-            costume = db.add_costume(region, "Test costume")
+            group = db.add_group("Test")
+            costume = db.add_costume(group, "Test costume")
             db.rent(costume, "Tester", today(), today())
             assert db.list_active_rentals(), "rental not saved"
             PhotoStore(Path(tmp) / "photos")

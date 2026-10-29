@@ -1,6 +1,10 @@
 # Outfit Manager
 
-- **Costumes** are grouped by region each with a photo, inventory number and size.
+- **Costumes** each have a photo, inventory number and size, and are sorted into
+  **groups** you name yourself (by region, by men's/women's, accessories…). New
+  costumes go to the **Default** group unless you pick another one. Default
+  can be renamed but not deleted; deleting any other group moves its costumes
+  to Default.
 - **Rent out** a costume to someone with a return-by date; **take it back** when it is returned.
 - **Rentals** lists everything that is out, with overdue costumes first.
 - **History** shows past rentals and whether they came back on time.
@@ -62,7 +66,7 @@ OutfitManager.spec         PyInstaller build recipe
 .github/workflows/build.yml  Windows + Linux builds and releases
 outfit_manager/
   app.py                   window + functions the screens call
-  db.py                    SQLite storage and rules (incl. upgrade of old databases)
+  db.py                    SQLite storage and rules (incl. upgrades of older databases)
   photos.py                photo import, resizing, thumbnails
   paths.py                 data folder location
   web/                     the screens (index.html, styles.css, app.js)

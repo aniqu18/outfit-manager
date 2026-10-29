@@ -106,8 +106,8 @@ function statusBadge(c) {
   if (c.status !== "rented") return '<span class="badge badge-available">Available</span>';
   return c.overdue ? '<span class="badge badge-overdue">Overdue</span>' : '<span class="badge badge-rented">Rented</span>';
 }
-function costumeMeta(c, withRegion) {
-  return [c.inventory_no && `#${c.inventory_no}`, c.size && `Size ${c.size}`, withRegion && c.region]
+function costumeMeta(c, withGroup) {
+  return [c.inventory_no && `#${c.inventory_no}`, c.size && `Size ${c.size}`, withGroup && c.group_name]
     .filter(Boolean).map(esc).join(" · ");
 }
 
@@ -115,10 +115,10 @@ function costumeMeta(c, withRegion) {
 
 const state = {
   view: "costumes",
-  regionId: null, // null = all costumes
+  groupId: null, // null = all costumes
   search: "",
   historySearch: "",
-  regions: [],
+  groups: [],
   today: "",
   overdue: 0,
   detailId: null,
@@ -128,20 +128,20 @@ const main = () => $("#main");
 
 /** Reload everything that may have changed: sidebar, current page, open detail panel. */
 async function refresh() {
-  const [summary, regions] = await Promise.all([api("summary"), api("list_regions")]);
+  const [summary, groups] = await Promise.all([api("summary"), api("list_groups")]);
   state.today = summary.today;
   state.overdue = summary.overdue_count;
-  state.regions = regions;
-  if (state.regionId !== null && !regions.some((r) => r.id === state.regionId)) state.regionId = null;
+  state.groups = groups;
+  if (state.groupId !== null && !groups.some((r) => r.id === state.groupId)) state.groupId = null;
   renderSidebar();
   await renderView();
   if (state.detailId !== null) await renderDrawer();
 }
 
-function go(view, regionId = state.regionId) {
-  const changed = view !== state.view || regionId !== state.regionId;
+function go(view, groupId = state.groupId) {
+  const changed = view !== state.view || groupId !== state.groupId;
   state.view = view;
-  state.regionId = regionId;
+  state.groupId = groupId;
   if (changed) state.search = "";
   if (state.detailId !== null) closeDrawer();
   renderSidebar();
@@ -152,26 +152,26 @@ function go(view, regionId = state.regionId) {
 
 function renderSidebar() {
   for (const btn of $$(".nav-item")) {
-    btn.classList.toggle("active", btn.dataset.view === state.view && !(state.view === "costumes" && state.regionId !== null));
+    btn.classList.toggle("active", btn.dataset.view === state.view && !(state.view === "costumes" && state.groupId !== null));
   }
   const badge = $("#overdue-badge");
   badge.hidden = state.overdue === 0;
   badge.textContent = state.overdue;
 
-  const total = state.regions.reduce((sum, r) => sum + r.costume_count, 0);
+  const total = state.groups.reduce((sum, r) => sum + r.costume_count, 0);
   const item = (id, name, count, photoUrl, iconName) => {
-    const active = state.view === "costumes" && state.regionId === id;
+    const active = state.view === "costumes" && state.groupId === id;
     const thumb = photoUrl ? `<img src="${photoUrl}" alt="">` : icon(iconName);
-    return `<button class="region-item ${active ? "active" : ""}" data-region="${id ?? ""}">
-      <span class="region-thumb">${thumb}</span>
-      <span class="region-text"><span class="region-name">${esc(name)}</span>
-      <span class="region-count">${plural(count, "costume")}</span></span></button>`;
+    return `<button class="group-item ${active ? "active" : ""}" data-group="${id ?? ""}">
+      <span class="group-thumb">${thumb}</span>
+      <span class="group-text"><span class="group-name">${esc(name)}</span>
+      <span class="group-count">${plural(count, "costume")}</span></span></button>`;
   };
-  $("#regions").innerHTML =
+  $("#groups").innerHTML =
     item(null, "All costumes", total, null, "dress") +
-    state.regions.map((r) => item(r.id, r.name, r.costume_count, r.photo_url, "folder")).join("");
-  for (const btn of $$(".region-item")) {
-    btn.onclick = () => go("costumes", btn.dataset.region ? Number(btn.dataset.region) : null);
+    state.groups.map((r) => item(r.id, r.name, r.costume_count, r.photo_url, "folder")).join("");
+  for (const btn of $$(".group-item")) {
+    btn.onclick = () => go("costumes", btn.dataset.group ? Number(btn.dataset.group) : null);
   }
 }
 
@@ -186,17 +186,17 @@ function renderView() {
 /* ---------- costumes ---------- */
 
 async function renderCostumes() {
-  const region = state.regions.find((r) => r.id === state.regionId);
+  const group = state.groups.find((r) => r.id === state.groupId);
   main().innerHTML = `
     <div class="page-header">
       <div>
-        <h1 class="page-title">${esc(region ? region.name : "All costumes")}</h1>
+        <h1 class="page-title">${esc(group ? group.name : "All costumes")}</h1>
         <div class="page-subtitle" id="costume-count">&nbsp;</div>
       </div>
       <div class="page-actions">
         <label class="search">${icon("search")}<input id="costume-search" placeholder="Search costumes" value="${esc(state.search)}"></label>
-        ${region ? `<button class="icon-btn" id="rename-region" title="Rename region">${icon("edit")}</button>
-                    <button class="icon-btn" id="delete-region" title="Delete region">${icon("trash")}</button>` : ""}
+        ${group ? `<button class="icon-btn" id="rename-group" title="Rename group">${icon("edit")}</button>` : ""}
+        ${group && !group.is_default ? `<button class="icon-btn" id="delete-group" title="Delete group">${icon("trash")}</button>` : ""}
         <button class="btn btn-primary" id="add-costume">${icon("plus")}Add costume</button>
       </div>
     </div>
@@ -208,17 +208,15 @@ async function renderCostumes() {
     timer = setTimeout(() => { state.search = e.target.value; guard(renderGrid)(); }, 200);
   };
   $("#add-costume").onclick = () => costumeForm();
-  if (region) {
-    $("#rename-region").onclick = () => regionForm(region);
-    $("#delete-region").onclick = () => deleteRegion(region);
-  }
+  if (group) $("#rename-group").onclick = () => groupForm(group);
+  $("#delete-group")?.addEventListener("click", () => deleteGroup(group));
   await renderGrid();
 }
 
 let gridRequest = 0;
 async function renderGrid() {
   const request = ++gridRequest;
-  const costumes = await api("list_costumes", state.regionId, state.search);
+  const costumes = await api("list_costumes", state.groupId, state.search);
   const grid = $("#costume-grid");
   if (!grid || request !== gridRequest) return; // a newer search already ran
 
@@ -226,12 +224,6 @@ async function renderGrid() {
   $("#costume-count").textContent = `${plural(costumes.length, "costume")} · ${available} available`;
 
   grid.className = "";
-  if (!state.regions.length) {
-    grid.innerHTML = `<div class="empty"><h3>Welcome!</h3>Costumes are grouped by region. Start by adding the first region.
-      <div><button class="btn btn-primary" id="empty-add-region">${icon("plus")}Add region</button></div></div>`;
-    $("#empty-add-region").onclick = () => regionForm();
-    return;
-  }
   if (!costumes.length) {
     grid.innerHTML = state.search
       ? `<div class="empty"><h3>No matches</h3>No costume matches “${esc(state.search)}”.</div>`
@@ -247,7 +239,7 @@ async function renderGrid() {
       <div class="card-photo">${photoHtml(c.photo_url)}${statusBadge(c)}</div>
       <div class="card-body">
         <div class="card-name">${esc(c.name)}</div>
-        <div class="card-meta">${costumeMeta(c, state.regionId === null) || "&nbsp;"}</div>
+        <div class="card-meta">${costumeMeta(c, state.groupId === null) || "&nbsp;"}</div>
         ${c.status === "rented" ? `<div class="card-rented ${c.overdue ? "overdue" : ""}">${esc(c.borrower)} · until ${fmtShort(c.due_on)}</div>` : ""}
       </div>
     </button>`).join("");
@@ -374,7 +366,7 @@ async function renderDrawer() {
 
   drawer.innerHTML = `
     <div class="drawer-top">
-      <span class="row-sub">${esc(c.region || "")}</span>
+      <span class="row-sub">${esc(c.group_name || "")}</span>
       <button class="icon-btn" id="drawer-close" title="Close">${icon("close")}</button>
     </div>
     <div class="drawer-photo">${photoHtml(c.photo_url)}</div>
@@ -481,41 +473,46 @@ function onSubmit(form, action) {
 
 const field = (form, name) => form.elements[name].value;
 
-/* ---------- regions ---------- */
+/* ---------- groups ---------- */
 
-function regionForm(region = null) {
+function groupForm(group = null) {
   const form = openModal({
-    title: region ? "Rename region" : "Add region",
-    submitLabel: region ? "Save" : "Add region",
-    body: `<div class="field"><label for="f-name">Region name</label>
-      <input class="input" id="f-name" name="name" value="${esc(region?.name)}" placeholder="e.g. Opoczyński" autocomplete="off"></div>`,
+    title: group ? "Rename group" : "Add group",
+    submitLabel: group ? "Save" : "Add group",
+    body: `<div class="field"><label for="f-name">Group name</label>
+      <input class="input" id="f-name" name="name" value="${esc(group?.name)}" placeholder="e.g. Opoczyński, Men's, Accessories" autocomplete="off"></div>
+      <p class="row-sub">Groups are just for organising costumes. Use whatever makes sense to you.</p>`,
   });
   onSubmit(form, async () => {
-    if (region) {
-      await api("rename_region", region.id, field(form, "name"));
+    if (group) {
+      await api("rename_group", group.id, field(form, "name"));
     } else {
-      state.regionId = await api("add_region", field(form, "name"));
+      state.groupId = await api("add_group", field(form, "name"));
       state.view = "costumes";
       state.search = "";
     }
     closeModal();
-    toast(region ? "Region renamed" : "Region added");
+    toast(group ? "Group renamed" : "Group added");
     await refresh();
   });
 }
 
-function deleteRegion(region) {
+function deleteGroup(group) {
+  const fallback = state.groups.find((g) => g.is_default);
+  const moves = group.costume_count
+    ? ` Its ${plural(group.costume_count, "costume")} will move to <b>${esc(fallback?.name ?? "the default group")}</b>.`
+    : "";
   const form = openModal({
-    title: "Delete region?",
-    submitLabel: "Delete region",
+    title: "Delete group?",
+    submitLabel: "Delete group",
     danger: true,
-    body: `<p>Delete <b>${esc(region.name)}</b>? This only works when the region has no costumes.</p>`,
+    body: `<p>Delete <b>${esc(group.name)}</b>?${moves}</p>`,
   });
   onSubmit(form, async () => {
-    await api("delete_region", region.id);
+    await api("delete_group", group.id);
     closeModal();
-    toast("Region deleted");
-    state.regionId = null;
+    toast("Group deleted");
+    state.groupId = null;
     await refresh();
   });
 }
@@ -523,15 +520,11 @@ function deleteRegion(region) {
 /* ---------- costumes ---------- */
 
 function costumeForm(costume = null) {
-  if (!state.regions.length) {
-    toast("Add a region first", true);
-    regionForm();
-    return;
-  }
   const original = costume?.photo ?? null;
   let photo = original;
   let photoUrl = costume?.photo_url ?? null;
-  const regionId = costume?.region_id ?? state.regionId ?? (state.regions.length === 1 ? state.regions[0].id : null);
+  // Current group, else the default group
+  const groupId = costume?.group_id ?? state.groupId ?? state.groups.find((g) => g.is_default)?.id;
   const discardPicked = () => { if (photo && photo !== original) api("discard_photo", photo).catch(() => {}); };
 
   const form = openModal({
@@ -549,10 +542,9 @@ function costumeForm(costume = null) {
           </div>
         </div>
         <div>
-          <div class="field"><label for="f-region">Region</label>
-            <select class="select" id="f-region" name="region">
-              <option value="">Choose a region…</option>
-              ${state.regions.map((r) => `<option value="${r.id}" ${r.id === regionId ? "selected" : ""}>${esc(r.name)}</option>`).join("")}
+          <div class="field"><label for="f-group">Group</label>
+            <select class="select" id="f-group" name="group">
+              ${state.groups.map((r) => `<option value="${r.id}" ${r.id === groupId ? "selected" : ""}>${esc(r.name)}</option>`).join("")}
             </select></div>
           <div class="field"><label for="f-name">Name</label>
             <input class="input" id="f-name" name="name" value="${esc(costume?.name)}" placeholder="e.g. Women's costume" autocomplete="off"></div>
@@ -567,7 +559,7 @@ function costumeForm(costume = null) {
         </div>
       </div>`,
   });
-  // Focus the name rather than the region select
+  // Focus the name rather than the group select
   setTimeout(() => form.elements.name.focus(), 0);
 
   const showPhoto = () => {
@@ -597,7 +589,7 @@ function costumeForm(costume = null) {
 
   onSubmit(form, async () => {
     const data = {
-      region_id: field(form, "region") ? Number(field(form, "region")) : null,
+      group_id: field(form, "group") ? Number(field(form, "group")) : null,
       name: field(form, "name"),
       inventory_no: field(form, "inventory_no"),
       size: field(form, "size"),
@@ -709,7 +701,7 @@ async function init() {
   started = true;
   hydrateIcons();
   for (const btn of $$(".nav-item")) btn.onclick = () => go(btn.dataset.view, null);
-  $("#add-region").onclick = () => regionForm();
+  $("#add-group").onclick = () => groupForm();
   $("#drawer-scrim").onclick = closeDrawer;
   $("#modal-scrim").addEventListener("mousedown", (e) => { if (e.target.id === "modal-scrim") closeModal(); });
   document.addEventListener("keydown", (e) => {
