@@ -8,7 +8,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import date, datetime
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Version 2 layout. New databases are created with it and then upgraded like old ones
 # (see _init_schema), so there is a single path to the current layout.
@@ -60,7 +60,7 @@ CREATE UNIQUE INDEX one_active_rental_per_costume ON rentals(costume_id) WHERE r
 """
 
 NO_REGION = "No region"  # name used by the version 1 -> 2 upgrade
-DEFAULT_GROUP = "Default"
+DEFAULT_GROUP = "Default"  # only used by the version 2 -> 3 -> 4 upgrades
 
 # Version 3: "regions" became free-form "groups", and there is always one default group
 # that can't be deleted (new costumes go there; costumes of a deleted group move there).
@@ -80,6 +80,17 @@ UPDATE costumes SET group_id = (SELECT id FROM costume_groups WHERE is_default =
 WHERE group_id IS NULL AND deleted_at IS NULL;
 
 CREATE UNIQUE INDEX one_default_group ON costume_groups(is_default) WHERE is_default = 1;
+"""
+
+# Version 4: no default group any more. Groups are optional; "All costumes" shows everything.
+# A default group still called "Default" is removed (its costumes become ungrouped);
+# one the user renamed is kept as an ordinary group.
+_MIGRATE_V3_TO_V4 = f"""
+UPDATE costumes SET group_id = NULL
+WHERE group_id IN (SELECT id FROM costume_groups WHERE is_default = 1 AND name = '{DEFAULT_GROUP}');
+DELETE FROM costume_groups WHERE is_default = 1 AND name = '{DEFAULT_GROUP}';
+DROP INDEX one_default_group;
+ALTER TABLE costume_groups DROP COLUMN is_default;
 """
 
 
@@ -140,7 +151,9 @@ class Database:
                     "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'outfits'"
                 ).fetchone()
                 steps.append(_MIGRATE_FROM_V1 if has_old_tables else _SCHEMA_V2 + ACTIVE_RENTAL_INDEX)
-            steps.append(_MIGRATE_V2_TO_V3)
+            if version < 3:
+                steps.append(_MIGRATE_V2_TO_V3)
+            steps.append(_MIGRATE_V3_TO_V4)
             # All steps run in one transaction: an interrupted upgrade leaves the database untouched
             conn.executescript(
                 f"PRAGMA foreign_keys = OFF; BEGIN; {''.join(steps)} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
@@ -151,10 +164,10 @@ class Database:
     # --- groups ---
 
     def list_groups(self):
-        """Groups (default first) with costume counts and a cover photo (the first costume photo)."""
+        """Groups with costume counts and a cover photo (the first costume photo)."""
         with self.connect() as conn:
             rows = conn.execute("""
-                SELECT g.id, g.name, g.is_default,
+                SELECT g.id, g.name,
                        COUNT(c.id) AS costume_count,
                        COUNT(c.id) - COUNT(r.id) AS available_count,
                        (SELECT photo FROM costumes
@@ -164,13 +177,9 @@ class Database:
                 LEFT JOIN costumes c ON c.group_id = g.id AND c.deleted_at IS NULL
                 LEFT JOIN rentals r ON r.costume_id = c.id AND r.returned_on IS NULL
                 GROUP BY g.id
-                ORDER BY g.is_default DESC, g.name
+                ORDER BY g.name
             """).fetchall()
-        return [{**dict(r), "is_default": bool(r["is_default"])} for r in rows]
-
-    @staticmethod
-    def _default_group_id(conn) -> int:
-        return conn.execute("SELECT id FROM costume_groups WHERE is_default = 1").fetchone()["id"]
+        return [dict(r) for r in rows]
 
     def add_group(self, name: str) -> int:
         name = _clean(name)
@@ -194,13 +203,37 @@ class Database:
                 raise ValueError(f"Group '{name}' already exists.")
             conn.execute("UPDATE costume_groups SET name = ? WHERE id = ?", (name, group_id))
 
-    def delete_group(self, group_id: int):
-        """Delete a group; its costumes (incl. deleted ones, for history) move to the default group."""
+    def delete_group(self, group_id: int, move_to: int = None, delete_costumes: bool = False):
+        """Delete a group and decide what happens to its costumes.
+
+        - delete_costumes: the costumes are deleted too (not possible while one is rented out)
+        - move_to: they move to that group
+        - neither: they stay, without a group (still listed under "All costumes")
+        Deleted costumes stay in the database without a group, so return history stays complete.
+        """
         with self.connect() as conn:
-            default_id = self._default_group_id(conn)
-            if group_id == default_id:
-                raise ValueError("The default group can't be deleted (you can rename it).")
-            conn.execute("UPDATE costumes SET group_id = ? WHERE group_id = ?", (default_id, group_id))
+            if delete_costumes:
+                rented = conn.execute("""
+                    SELECT COUNT(*) FROM costumes c
+                    JOIN rentals r ON r.costume_id = c.id AND r.returned_on IS NULL
+                    WHERE c.group_id = ? AND c.deleted_at IS NULL
+                """, (group_id,)).fetchone()[0]
+                if rented:
+                    which = "1 costume in this group is" if rented == 1 else f"{rented} costumes in this group are"
+                    it = "it" if rented == 1 else "them"
+                    raise ValueError(f"{which} rented out. Take {it} back first, or keep the costumes.")
+                conn.execute(
+                    "UPDATE costumes SET deleted_at = ? WHERE group_id = ? AND deleted_at IS NULL", (now_iso(), group_id)
+                )
+            elif move_to is not None:
+                if move_to == group_id or not conn.execute(
+                    "SELECT 1 FROM costume_groups WHERE id = ?", (move_to,)
+                ).fetchone():
+                    raise ValueError("Choose another group to move the costumes to.")
+                conn.execute(
+                    "UPDATE costumes SET group_id = ? WHERE group_id = ? AND deleted_at IS NULL", (move_to, group_id)
+                )
+            conn.execute("UPDATE costumes SET group_id = NULL WHERE group_id = ?", (group_id,))
             conn.execute("DELETE FROM costume_groups WHERE id = ?", (group_id,))
 
     # --- costumes ---
@@ -241,9 +274,9 @@ class Database:
         name, inventory_no = _clean(name), _clean(inventory_no)
         if not name:
             raise ValueError("Costume name is required.")
-        if group_id is None:
-            group_id = self._default_group_id(conn)
-        elif not conn.execute("SELECT 1 FROM costume_groups WHERE id = ?", (group_id,)).fetchone():
+        if group_id is not None and not conn.execute(
+            "SELECT 1 FROM costume_groups WHERE id = ?", (group_id,)
+        ).fetchone():
             raise ValueError("This group no longer exists.")
         if inventory_no and conn.execute(
             "SELECT 1 FROM costumes WHERE inventory_no = ? AND deleted_at IS NULL AND id IS NOT ?",
@@ -253,7 +286,7 @@ class Database:
         return group_id, name, inventory_no, _clean(size), _clean(description)
 
     def add_costume(self, group_id, name, inventory_no=None, size=None, description=None, photo=None) -> int:
-        """Add a costume; `group_id` None puts it in the default group."""
+        """Add a costume; `group_id` None means no group."""
         with self.connect() as conn:
             fields = self._costume_fields(conn, None, group_id, name, inventory_no, size, description)
             return conn.execute(
@@ -382,6 +415,11 @@ class Database:
         with self.connect() as conn:
             rows = conn.execute(query + " ORDER BY r.returned_on DESC, r.id DESC", params).fetchall()
         return [{**dict(r), "late": r["returned_on"] > r["due_on"]} for r in rows]
+
+    def costume_count(self) -> int:
+        """All costumes (with or without a group), not counting deleted ones."""
+        with self.connect() as conn:
+            return conn.execute("SELECT COUNT(*) FROM costumes WHERE deleted_at IS NULL").fetchone()[0]
 
     def overdue_count(self) -> int:
         with self.connect() as conn:

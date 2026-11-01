@@ -121,6 +121,7 @@ const state = {
   groups: [],
   today: "",
   overdue: 0,
+  costumeCount: 0,
   detailId: null,
 };
 
@@ -131,6 +132,7 @@ async function refresh() {
   const [summary, groups] = await Promise.all([api("summary"), api("list_groups")]);
   state.today = summary.today;
   state.overdue = summary.overdue_count;
+  state.costumeCount = summary.costume_count;
   state.groups = groups;
   if (state.groupId !== null && !groups.some((r) => r.id === state.groupId)) state.groupId = null;
   renderSidebar();
@@ -158,21 +160,55 @@ function renderSidebar() {
   badge.hidden = state.overdue === 0;
   badge.textContent = state.overdue;
 
-  const total = state.groups.reduce((sum, r) => sum + r.costume_count, 0);
-  const item = (id, name, count, photoUrl, iconName) => {
+  const total = state.costumeCount; // includes costumes without a group
+  const item = (g) => {
+    const id = g ? g.id : null;
     const active = state.view === "costumes" && state.groupId === id;
-    const thumb = photoUrl ? `<img src="${photoUrl}" alt="">` : icon(iconName);
-    return `<button class="group-item ${active ? "active" : ""}" data-group="${id ?? ""}">
-      <span class="group-thumb">${thumb}</span>
-      <span class="group-text"><span class="group-name">${esc(name)}</span>
-      <span class="group-count">${plural(count, "costume")}</span></span></button>`;
+    const thumb = g?.photo_url ? `<img src="${g.photo_url}" alt="">` : icon(g ? "folder" : "dress");
+    return `<button class="group-item ${active ? "active" : ""}" data-group="${id ?? ""}"
+        ${g ? 'title="Right-click to rename or delete"' : ""}>
+        <span class="group-thumb">${thumb}</span>
+        <span class="group-text"><span class="group-name">${esc(g ? g.name : "All costumes")}</span>
+        <span class="group-count">${plural(g ? g.costume_count : total, "costume")}</span></span>
+      </button>`;
   };
-  $("#groups").innerHTML =
-    item(null, "All costumes", total, null, "dress") +
-    state.groups.map((r) => item(r.id, r.name, r.costume_count, r.photo_url, "folder")).join("");
+  $("#groups").innerHTML = item(null) + state.groups.map(item).join("");
   for (const btn of $$(".group-item")) {
-    btn.onclick = () => go("costumes", btn.dataset.group ? Number(btn.dataset.group) : null);
+    const group = state.groups.find((g) => g.id === Number(btn.dataset.group));
+    btn.onclick = () => go("costumes", group ? group.id : null);
+    // Right-click a group to rename or delete it
+    if (group) {
+      btn.oncontextmenu = (e) => {
+        e.preventDefault();
+        openContextMenu(e, [
+          { label: "Rename", icon: "edit", action: () => groupForm(group) },
+          { label: "Delete group", icon: "trash", danger: true, action: () => deleteGroup(group) },
+        ]);
+      };
+    }
   }
+}
+
+/* ---------- right-click menu ---------- */
+
+function openContextMenu(e, items) {
+  const menu = $("#context-menu");
+  menu.innerHTML = items.map((it, i) =>
+    `<button class="context-item ${it.danger ? "danger" : ""}" data-i="${i}">${icon(it.icon)}${esc(it.label)}</button>`
+  ).join("");
+  for (const btn of $$(".context-item", menu)) {
+    btn.onclick = () => { closeContextMenu(); items[Number(btn.dataset.i)].action(); };
+  }
+  menu.hidden = false;
+  // Open at the pointer, but keep the menu inside the window
+  const { offsetWidth: w, offsetHeight: h } = menu;
+  menu.style.left = `${Math.min(e.clientX, window.innerWidth - w - 8)}px`;
+  menu.style.top = `${Math.min(e.clientY, window.innerHeight - h - 8)}px`;
+  menu.querySelector("button")?.focus({ preventScroll: true });
+}
+
+function closeContextMenu() {
+  $("#context-menu").hidden = true;
 }
 
 /* ================= pages ================= */
@@ -195,8 +231,6 @@ async function renderCostumes() {
       </div>
       <div class="page-actions">
         <label class="search">${icon("search")}<input id="costume-search" placeholder="Search costumes" value="${esc(state.search)}"></label>
-        ${group ? `<button class="icon-btn" id="rename-group" title="Rename group">${icon("edit")}</button>` : ""}
-        ${group && !group.is_default ? `<button class="icon-btn" id="delete-group" title="Delete group">${icon("trash")}</button>` : ""}
         <button class="btn btn-primary" id="add-costume">${icon("plus")}Add costume</button>
       </div>
     </div>
@@ -208,8 +242,6 @@ async function renderCostumes() {
     timer = setTimeout(() => { state.search = e.target.value; guard(renderGrid)(); }, 200);
   };
   $("#add-costume").onclick = () => costumeForm();
-  if (group) $("#rename-group").onclick = () => groupForm(group);
-  $("#delete-group")?.addEventListener("click", () => deleteGroup(group));
   await renderGrid();
 }
 
@@ -480,7 +512,7 @@ function groupForm(group = null) {
     title: group ? "Rename group" : "Add group",
     submitLabel: group ? "Save" : "Add group",
     body: `<div class="field"><label for="f-name">Group name</label>
-      <input class="input" id="f-name" name="name" value="${esc(group?.name)}" placeholder="e.g. Opoczyński, Men's, Accessories" autocomplete="off"></div>
+      <input class="input" id="f-name" name="name" value="${esc(group?.name)}" placeholder="e.g. Women's, Men's, Accessories" autocomplete="off"></div>
       <p class="row-sub">Groups are just for organising costumes. Use whatever makes sense to you.</p>`,
   });
   onSubmit(form, async () => {
@@ -498,21 +530,42 @@ function groupForm(group = null) {
 }
 
 function deleteGroup(group) {
-  const fallback = state.groups.find((g) => g.is_default);
-  const moves = group.costume_count
-    ? ` Its ${plural(group.costume_count, "costume")} will move to <b>${esc(fallback?.name ?? "the default group")}</b>.`
-    : "";
-  const form = openModal({
-    title: "Delete group?",
-    submitLabel: "Delete group",
-    danger: true,
-    body: `<p>Delete <b>${esc(group.name)}</b>?${moves}</p>`,
+  const others = state.groups.filter((g) => g.id !== group.id);
+  const count = group.costume_count;
+  const rented = group.costume_count - group.available_count;
+  const choice = (value, title, detail, extra = "", disabled = false) => `
+      <label class="choice ${disabled ? "disabled" : ""}">
+        <input type="radio" name="mode" value="${value}" ${value === "keep" ? "checked" : ""} ${disabled ? "disabled" : ""}>
+        <span class="choice-text"><b>${title}</b>${extra}<span class="row-sub">${detail}</span></span>
+      </label>`;
+  const body = !count
+    ? `<p>Delete <b>${esc(group.name)}</b>? It has no costumes.</p>`
+    : `<p>Delete <b>${esc(group.name)}</b>? What should happen to its ${plural(count, "costume")}?</p>
+      ${choice("keep", "Keep them without a group", "They stay in All costumes.")}
+      ${others.length ? choice("move", "Move them to another group", "", `
+          <select class="select" name="move_to">
+            ${others.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("")}
+          </select>`) : ""}
+      ${choice("delete", "Delete them too", rented
+        ? `Not possible while ${rented === 1 ? "1 of them is" : `${rented} of them are`} rented out.`
+        : "They disappear from the costume list. Their past rentals stay in Return history.", "", rented > 0)}`;
+  const form = openModal({ title: "Delete group?", submitLabel: "Delete group", danger: true, body });
+  // Picking a group in the list selects the "move" option
+  form.elements.move_to?.addEventListener("focus", () => {
+    form.querySelector('input[value="move"]').checked = true;
   });
+
   onSubmit(form, async () => {
-    await api("delete_group", group.id);
+    const mode = count ? form.elements.mode.value : "keep";
+    const moveTo = mode === "move" ? Number(form.elements.move_to.value) : null;
+    await api("delete_group", group.id, moveTo, mode === "delete");
     closeModal();
-    toast("Group deleted");
-    state.groupId = null;
+    const target = state.groups.find((g) => g.id === moveTo);
+    toast(!count ? "Group deleted"
+      : mode === "delete" ? `Group and its ${plural(count, "costume")} deleted`
+      : mode === "move" ? `Group deleted, costumes moved to ${target?.name}`
+      : "Group deleted, costumes kept without a group");
+    if (state.groupId === group.id) state.groupId = mode === "move" ? moveTo : null;
     await refresh();
   });
 }
@@ -523,8 +576,8 @@ function costumeForm(costume = null) {
   const original = costume?.photo ?? null;
   let photo = original;
   let photoUrl = costume?.photo_url ?? null;
-  // Current group, else the default group
-  const groupId = costume?.group_id ?? state.groupId ?? state.groups.find((g) => g.is_default)?.id;
+  // A new costume starts in the group being viewed (or none)
+  const groupId = costume ? costume.group_id : state.groupId;
   const discardPicked = () => { if (photo && photo !== original) api("discard_photo", photo).catch(() => {}); };
 
   const form = openModal({
@@ -542,9 +595,10 @@ function costumeForm(costume = null) {
           </div>
         </div>
         <div>
-          <div class="field"><label for="f-group">Group</label>
+          <div class="field"><label for="f-group">Group <span class="hint">(optional)</span></label>
             <select class="select" id="f-group" name="group">
-              ${state.groups.map((r) => `<option value="${r.id}" ${r.id === groupId ? "selected" : ""}>${esc(r.name)}</option>`).join("")}
+              <option value="" ${groupId == null ? "selected" : ""}>No group</option>
+              ${state.groups.map((g) => `<option value="${g.id}" ${g.id === groupId ? "selected" : ""}>${esc(g.name)}</option>`).join("")}
             </select></div>
           <div class="field"><label for="f-name">Name</label>
             <input class="input" id="f-name" name="name" value="${esc(costume?.name)}" placeholder="e.g. Women's costume" autocomplete="off"></div>
@@ -704,8 +758,17 @@ async function init() {
   $("#add-group").onclick = () => groupForm();
   $("#drawer-scrim").onclick = closeDrawer;
   $("#modal-scrim").addEventListener("mousedown", (e) => { if (e.target.id === "modal-scrim") closeModal(); });
+  // Close the right-click menu on any click elsewhere, scroll or window resize
+  document.addEventListener("mousedown", (e) => { if (!e.target.closest("#context-menu")) closeContextMenu(); });
+  window.addEventListener("resize", closeContextMenu);
+  document.addEventListener("scroll", closeContextMenu, true);
+  // Hide the browser's own right-click menu (Back, Reload…), except in text fields for copy/paste
+  document.addEventListener("contextmenu", (e) => {
+    if (!e.target.closest("input, textarea")) e.preventDefault();
+  });
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
+    if (!$("#context-menu").hidden) return closeContextMenu();
     if (!$("#modal-scrim").hidden) closeModal();
     else if (state.detailId !== null) closeDrawer();
   });

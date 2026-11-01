@@ -1,10 +1,11 @@
 # Outfit Manager
 
-- **Costumes** each have a photo, inventory number and size, and are sorted into
-  **groups** you name yourself (by region, by men's/women's, accessories…). New
-  costumes go to the **Default** group unless you pick another one. Default
-  can be renamed but not deleted; deleting any other group moves its costumes
-  to Default.
+- **Costumes** each have a photo, inventory number and size. You can sort them
+  into **groups** you name yourself (by region, men's/women's, accessories…),
+  but you don't have to: *All costumes* always shows everything. Right-click a
+  group in the sidebar to rename or delete it. When you delete a group, you
+  choose whether its costumes stay (without a group), move to another group,
+  or are deleted too (their past rentals stay in Return history).
 - **Rent out** a costume to someone with a return-by date; **take it back** when it is returned.
 - **Rentals** lists everything that is out, with overdue costumes first.
 - **Return history** (History in the sidebar) lists returned costumes and whether they came back on time.

@@ -3,7 +3,6 @@
 import functools
 import logging
 import os
-import shutil
 import sys
 import threading
 import traceback
@@ -55,7 +54,7 @@ class Api:
 
     @api_call
     def summary(self):
-        return {"today": today(), "overdue_count": self._db.overdue_count()}
+        return {"today": today(), "overdue_count": self._db.overdue_count(), "costume_count": self._db.costume_count()}
 
     # --- groups ---
 
@@ -72,8 +71,9 @@ class Api:
         self._db.rename_group(group_id, name)
 
     @api_call
-    def delete_group(self, group_id):
-        self._db.delete_group(group_id)
+    def delete_group(self, group_id, move_to=None, delete_costumes=False):
+        """Costumes move to group `move_to`, are deleted (`delete_costumes`), or else stay without a group."""
+        self._db.delete_group(group_id, move_to, delete_costumes)
 
     # --- costumes ---
 
@@ -156,13 +156,6 @@ class Api:
     @api_call
     def list_history(self, search=""):
         return [self._with_photo(r) for r in self._db.list_history(search)]
-
-
-def _copy_legacy_db(target: Path):
-    """When running from source, carry over the old outfits.db from the project folder once."""
-    legacy = Path(__file__).resolve().parent.parent / DB_NAME
-    if not target.exists() and legacy.exists():
-        shutil.copy2(legacy, target)
 
 
 FROZEN = getattr(sys, "frozen", False)  # True inside the PyInstaller build
@@ -260,7 +253,6 @@ def _run(folder: Path):
             # The app only shows its own local screens, so it is safe to turn off.
             os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
     db_path = folder / DB_NAME
-    _copy_legacy_db(db_path)
     api = Api(Database(db_path), PhotoStore(folder / "photos"))
     api._window = webview.create_window(
         "Outfit Manager",
